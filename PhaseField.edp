@@ -1,0 +1,137 @@
+
+/* Domain geometry */
+
+real L = 80*4; /* [m], Length */
+real H = 80*4; /* [m], Height */
+real Lfrac = 20;/* [m], Frac length */
+
+real G = 10e9; /* [Pa] */
+real lambda = 20e9; /* [Pa] */
+
+real sigmaInf = 1e6; /* [Pa], Far-field stress */
+real p = 1.5e6; /* [Pa], Frac pressure */
+
+/* Mesh definition */
+int n = 20;
+
+real[int] xP = [-L, L, L, -L];
+real[int] yP = [-H, -H, H, H];
+int[int] nGamma 
+= [L/L, H/L, L/L, H/L]*n;
+
+int nFrac = 4*n*(Lfrac - (-Lfrac))/L;
+
+real hfrac = (Lfrac - (-Lfrac)) / real(nFrac);
+
+cout << "hfrac = " << hfrac << endl;
+
+int labelB = 1;
+int labelR = 2;
+int labelT = 3;
+int labelL = 4;
+
+int labelF = 5;
+
+int[int] labelGamma = 
+[labelB, labelR, labelT, labelL];
+
+
+
+border GammaDomain( t=0,1; i){
+
+    int iNext = (i+1)%nGamma.n;
+    x = xP[i]*(1-t) + xP[iNext]*t;
+    y = yP[i]*(1-t) + yP[iNext]*t;
+    label = labelGamma[i];
+}
+
+border GammaFrac( t=0,1 ){
+
+    x = (-Lfrac)*(1-t) + Lfrac*t;
+    y = 0;
+    label = labelF;
+}
+
+mesh Th = buildmesh( GammaDomain(nGamma) + GammaFrac(nFrac) );
+plot(Th);
+
+
+
+
+
+/* Differential operators */
+real sqrt2 = sqrt(2.0);
+macro epsilon(u, v) [dx(u), dy(v), (dy(u) + dx(v))/sqrt2] // EOM
+
+macro div(u, v) (dx(u) + dy(v)) // EOM
+
+/* Finite element space def */
+fespace Vh(Th, [P2, P2]);
+fespace Vh2(Th, P2);
+fespace Vh1(Th, P1);
+
+Vh [u,v];
+Vh [uu, vv];
+
+/* Create initial phase field */
+Vh1 phiOld = sign(real( (x>Lfrac) + (x<(-Lfrac)) + (abs(y) > 2*hfrac)) );
+
+plot(Th, phiOld, fill=1 );
+
+exit(0);
+
+
+
+solve LameFrac( [u,v], [uu, vv]) = 
+    int2d(Th)(
+        lambda*div(u,v)*div(uu, vv)
+        + 2*G*epsilon(u,v)'*epsilon(uu, vv)
+    )
+    - int1d(Th, labelF)(
+        p*vv
+    )
+    + int1d(Th, labelT)(
+        sigmaInf*vv
+    )
+    // + on(labelC, v = 0)
+    // + on(labelM, u = 0)
+    ;
+
+plot(Th, v, dim=3, fill=1,nbiso=50, value=1);
+
+int adaptLevels = 5;
+real error = 0.01;
+mesh ThMoved;
+real k = 10000;
+for(int i = 0; i < adaptLevels; i++ ){
+
+    Th = adaptmesh(
+        Th, [u,v],
+        err = error,
+        iso = 1
+    );
+
+    LameFrac;
+
+    ThMoved = movemesh(Th, [x+k*u, y+k*v]);
+
+    Vh1 sigmayy = lambda*div(u,v) + 2*G*dy(v);
+
+    fespace VhMoved(ThMoved, [P2, P2]);
+    fespace VhMovedP1(ThMoved, P1);
+
+    VhMoved [uMoved, vMoved];
+    VhMovedP1 sigmayyMoved;
+    sigmayyMoved[] = sigmayy[];
+    uMoved[] = u[];
+
+    plot(ThMoved, sigmayyMoved, dim=3, fill=1,nbiso=50, value=1, wait=0);
+
+    error = error/2;
+
+}
+
+real E = G*(3*lambda + 2*G) / (lambda + G);
+real nu = lambda / 2 / (lambda + G);
+real Eprime = E / (1-nu^2);
+
